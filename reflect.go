@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math/big"
 	"reflect"
 	"strings"
 	"sync"
@@ -84,7 +85,8 @@ func GetTypeFromStructDeclaration(o interface{}) reflect.Type {
 
 // Predeclaration of common types
 var (
-	timeType = GetTypeFromStructDeclaration(struct{ time.Time }{})
+	timeType   = GetTypeFromStructDeclaration(struct{ time.Time }{})
+	bigIntType = GetTypeFromStructDeclaration(struct{ big.Int }{})
 )
 
 const (
@@ -313,6 +315,17 @@ func readReflectBinary(rv reflect.Value, rt reflect.Type, opts Options, r io.Rea
 			t := ReadTime(r, n, err)
 			//log.Info("Read time", "t", t, "n", *n)
 			rv.Set(reflect.ValueOf(t))
+		} else if rt == bigIntType {
+			// Special case: time.Time
+
+			str := ReadString(r, lmt, n, err)
+			bigint, ok := new(big.Int).SetString(str, 10)
+			if !ok {
+				*err = errors.New(cmn.Fmt("get big int failed: %v", str))
+				return
+			}
+			//log.Info("Read time", "t", t, "n", *n)
+			rv.Set(reflect.ValueOf(bigint))
 		} else {
 			for _, fieldInfo := range typeInfo.Fields {
 				fieldIdx, fieldType, opts := fieldInfo.unpack()
@@ -760,6 +773,18 @@ func readReflectJSON(rv reflect.Value, rt reflect.Type, opts Options, o interfac
 				return
 			}
 			rv.Set(reflect.ValueOf(t))
+		} else if rt == bigIntType {
+			result, ok := o.(float64)
+			if !ok {
+				*err = errors.New(cmn.Fmt("Expected float64 but got type %v", reflect.TypeOf(o)))
+				return
+			}
+			if result != float64(int(result)) {
+				*err = errors.New(cmn.Fmt("Unexpected float %v", result))
+				return
+			}
+			t := new(big.Int).SetInt64(int64(result))
+			rv.Set(reflect.ValueOf(*t))
 		} else {
 			if typeInfo.Unwrap {
 				fieldIdx, fieldType, opts := typeInfo.Fields[0].unpack()
@@ -955,6 +980,14 @@ func writeReflectJSON(rv reflect.Value, rt reflect.Type, opts Options, w io.Writ
 			t := rv.Interface().(time.Time).UTC()
 			str := t.Format(RFC3339Millis)
 			jsonBytes, err_ := json.Marshal(str)
+			if err_ != nil {
+				*err = err_
+				return
+			}
+			WriteTo(jsonBytes, w, n, err)
+		} else if rt == bigIntType {
+			t := rv.Interface().(big.Int)
+			jsonBytes, err_ := json.Marshal(&t)
 			if err_ != nil {
 				*err = err_
 				return
